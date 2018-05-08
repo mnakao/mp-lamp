@@ -1625,39 +1625,52 @@ bool MP_LAMP::ProcessNode(int n) {
   start_time = timer_->Elapsed();
   lap_time = start_time;
 
-  int ppc_ext_buf[1000];
-
+  int itemset_buf_2[VariableLengthItemsetStack::kMaxItemsPerSet];  // 1048574 * sizeof(int) = about 4 MByte
+  uint64 sup_buf_2[11], child_sup_buf_2[11];
   int processed = 0;
   processing_node_ = true;
+  int ppc_ext_buf[1000];
+
   while(!node_stack_->Empty()) {
-    processed++;
-    expand_num_++;
+#pragma omp parallel private(child_sup_buf_2, sup_buf_2, itemset_buf_2, ppc_ext_buf) firstprivate(lap_time)
+    {
+      bool flag = false;
+#pragma omp critical
+      {
+	if(!node_stack_->Empty()){
+	  processed++;
+	  expand_num_++;
+	  node_stack_->CopyItem(node_stack_->Top(), itemset_buf_2);
+	  node_stack_->Pop();
+	  flag = true;
+	}
+      }
 
-    node_stack_->CopyItem(node_stack_->Top(), itemset_buf_);
-    node_stack_->Pop();
-
+      if(flag){
     // dbg
     DBG( D(3) << "expanded "; );
-    DBG( node_stack_->Print(D(3), itemset_buf_); );
+    DBG( node_stack_->Print(D(3), itemset_buf_2); );
 
     // calculate support from itemset_buf_
-    bsh_->Set(sup_buf_);
+    bsh_->Set(sup_buf_2);
     {
-      int n = node_stack_->GetItemNum(itemset_buf_);
+      int n = node_stack_->GetItemNum(itemset_buf_2);
       for (int i=0;i<n;i++) {
-        int item = node_stack_->GetNthItem(itemset_buf_, i);
-        bsh_->And(d_->NthData(item), sup_buf_);
+        int item = node_stack_->GetNthItem(itemset_buf_2, i);
+        bsh_->And(d_->NthData(item), sup_buf_2);
       }
     }
-
-    int core_i = g_->CoreIndex(*node_stack_, itemset_buf_);
+    
+    int core_i;
+#pragma omp critical
+    core_i = g_->CoreIndex(*node_stack_, itemset_buf_2);
 
     // int * ppc_ext_buf;
     // todo: use database reduction
 
-    assert(phase_!=1 || node_stack_->GetItemNum(itemset_buf_) != 0);
+    assert(phase_!=1 || node_stack_->GetItemNum(itemset_buf_2) != 0);
 
-    bool is_root_node = (node_stack_->GetItemNum(itemset_buf_) == 0);
+    bool is_root_node = (node_stack_->GetItemNum(itemset_buf_2) == 0);
 
     int accum_period_counter_ = 0;
     // reverse order
@@ -1667,10 +1680,13 @@ bool MP_LAMP::ProcessNode(int n) {
          new_item = d_->NextItemInReverseLoop(is_root_node, h_, p_, new_item) ) {
       // skip existing item
       // todo: improve speed here
-      if (node_stack_->Exist(itemset_buf_, new_item)) continue;
+      if (node_stack_->Exist(itemset_buf_2, new_item)) continue;
 
       {// Periodic probe. (do in both phases)
+#pragma omp atomic
         accum_period_counter_++;
+
+#pragma omp master
         if (FLAGS_probe_period_is_ms) {// using milli second
           if (accum_period_counter_ >= 64) {
             // to avoid calling timer_ frequently, time is checked once in 64 loops
@@ -1705,8 +1721,8 @@ bool MP_LAMP::ProcessNode(int n) {
         //       do something here for changed lambda_ (skipping new_item value ?)
       }
 
-      bsh_->Copy(sup_buf_, child_sup_buf_);
-      int sup_num = bsh_->AndCountUpdate(d_->NthData(new_item), child_sup_buf_);
+      bsh_->Copy(sup_buf_2, child_sup_buf_2);
+      int sup_num = bsh_->AndCountUpdate(d_->NthData(new_item), child_sup_buf_2);
 
       if (sup_num < lambda_) continue;
       // zoe 2017/01/25
@@ -1719,15 +1735,15 @@ bool MP_LAMP::ProcessNode(int n) {
       node_stack_->SetItemNum(ppc_ext_buf, 0); // clear item num
       node_stack_->SetSup(ppc_ext_buf, 0);     // clear sup
 
-      bool res = g_->PPCExtension(node_stack_, itemset_buf_,
-                                  child_sup_buf_, core_i, new_item,
+      bool res = g_->PPCExtension(node_stack_, itemset_buf_2,
+                                  child_sup_buf_2, core_i, new_item,
                                   ppc_ext_buf);
 
       node_stack_->SetSup(ppc_ext_buf, sup_num);
 
+#pragma omp critical
       { // critical section
         node_stack_->PushOneItemset(ppc_ext_buf);
-      }
 
       if (!res) {// todo: remove this redundancy
         node_stack_->Pop();
@@ -1749,8 +1765,8 @@ bool MP_LAMP::ProcessNode(int n) {
         // simple approach is to prepare a bool stack_is_full
         // add do MPI_Reduce with MPI_Op MPI_Lor
         if (phase_ == 2 && FLAGS_third_phase) {
-          int pos_sup_num = bsh_->AndCount(d_->PosNeg(), child_sup_buf_);
-          double pval = d_->PVal(sup_num, pos_sup_num, child_sup_buf_, d_->PosVal());
+          int pos_sup_num = bsh_->AndCount(d_->PosNeg(), child_sup_buf_2);
+          double pval = d_->PVal(sup_num, pos_sup_num, child_sup_buf_2, d_->PosVal());
           assert( pval >= 0.0 );
 
           RecordFrequentItemset(pval, sig_level_, sup_num, pos_sup_num, ppc_ext_buf);
@@ -1765,7 +1781,7 @@ bool MP_LAMP::ProcessNode(int n) {
         if ( sup_num <= lambda_ ) node_stack_->Pop();
       }
     }
-
+    }}}
     if (CheckProcessNodeEnd(n, n_is_ms_, processed, start_time)) break;
   }
 
