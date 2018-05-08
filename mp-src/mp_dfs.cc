@@ -1689,7 +1689,6 @@ bool MP_LAMP::ProcessNode(int n) {
 #pragma omp atomic
         accum_period_counter_++;
 
-#ifdef _AAA
 #pragma omp master
         if (FLAGS_probe_period_is_ms) {// using milli second
           if (accum_period_counter_ >= 64) {
@@ -1722,7 +1721,7 @@ bool MP_LAMP::ProcessNode(int n) {
         // note: do this before PushPre is called [2015-10-05 21:56]
         // todo: if database reduction is implemented,
         //       do something here for changed lambda_ (skipping new_item value ?)
-#endif
+
       }
       bsh_->Copy(sup_buf_2, child_sup_buf_2);
       int sup_num = bsh_->AndCountUpdate(d_->NthData(new_item), child_sup_buf_2);
