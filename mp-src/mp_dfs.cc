@@ -1626,7 +1626,10 @@ bool MP_LAMP::ProcessNode(int n) {
   lap_time = start_time;
 
   int itemset_buf_2[VariableLengthItemsetStack::kMaxItemsPerSet];  // 1048574 * sizeof(int) = about 4 MByte
-  uint64 sup_buf_2[11], child_sup_buf_2[11];
+  //  uint64 sup_buf_2[110], child_sup_buf_2[110];
+  //  uint64 *sup_buf_2 = bsh_->New();
+  //  uint64 *child_sup_buf_2 = bsh_->New();
+  uint64 sup_buf_2[200], child_sup_buf_2[200];
   int processed = 0;
   processing_node_ = true;
   int ppc_ext_buf[1000];
@@ -1686,6 +1689,7 @@ bool MP_LAMP::ProcessNode(int n) {
 #pragma omp atomic
         accum_period_counter_++;
 
+#ifdef _AAA
 #pragma omp master
         if (FLAGS_probe_period_is_ms) {// using milli second
           if (accum_period_counter_ >= 64) {
@@ -1716,11 +1720,10 @@ bool MP_LAMP::ProcessNode(int n) {
           }
         }
         // note: do this before PushPre is called [2015-10-05 21:56]
-
         // todo: if database reduction is implemented,
         //       do something here for changed lambda_ (skipping new_item value ?)
+#endif
       }
-
       bsh_->Copy(sup_buf_2, child_sup_buf_2);
       int sup_num = bsh_->AndCountUpdate(d_->NthData(new_item), child_sup_buf_2);
 
@@ -1745,7 +1748,7 @@ bool MP_LAMP::ProcessNode(int n) {
       { // critical section
         node_stack_->PushOneItemset(ppc_ext_buf);
 
-      if (!res) {// todo: remove this redundancy
+      if (!res || sup_num < lambda_) {// todo: remove this redundancy
         node_stack_->Pop();
       } else {
         node_stack_->SortTop();
